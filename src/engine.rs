@@ -57,7 +57,6 @@ use {
             Arc,
         },
         time::Duration,
-        time::SystemTime,
     },
 };
 
@@ -400,14 +399,10 @@ impl Reedline {
         }
     }
 
-    /// Get a new history session id based on the current time and the first commit datetime of reedline
+    /// Get a new history session id using UUIDv7
     pub fn create_history_session_id() -> Option<HistorySessionId> {
-        let nanos = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(n) => n.as_nanos() as i64,
-            Err(_) => 0,
-        };
-
-        Some(HistorySessionId::new(nanos))
+        let uuid = uuid::Uuid::now_v7().to_string();
+        Some(HistorySessionId::new(uuid))
     }
 
     /// Toggle whether reedline enables bracketed paste to reed copied content

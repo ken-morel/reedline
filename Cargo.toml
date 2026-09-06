@@ -33,6 +33,7 @@ thiserror = "2.0.19"
 unicase = "2.8.0"
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2"
+uuid = { version = "1.26.0", features = ["v7", "serde"] }
 
 [dev-dependencies]
 gethostname = "1.1.0"

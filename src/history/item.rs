@@ -20,13 +20,54 @@ impl Display for HistoryItemId {
     }
 }
 
+/// Trait to allow flexible creation of HistorySessionId from integers, strings, or UUIDs
+pub trait IntoHistorySessionId {
+    fn into_history_session_id(self) -> HistorySessionId;
+}
+
+impl IntoHistorySessionId for uuid::Uuid {
+    fn into_history_session_id(self) -> HistorySessionId {
+        HistorySessionId(self)
+    }
+}
+
+impl IntoHistorySessionId for i64 {
+    fn into_history_session_id(self) -> HistorySessionId {
+        HistorySessionId(uuid::Uuid::from_u128(self as u128))
+    }
+}
+
+impl IntoHistorySessionId for String {
+    fn into_history_session_id(self) -> HistorySessionId {
+        self.as_str().into_history_session_id()
+    }
+}
+
+impl IntoHistorySessionId for &str {
+    fn into_history_session_id(self) -> HistorySessionId {
+        match uuid::Uuid::parse_str(self) {
+            Ok(u) => HistorySessionId(u),
+            Err(_) => match self.parse::<i64>() {
+                Ok(i) => HistorySessionId(uuid::Uuid::from_u128(i as u128)),
+                Err(_) => HistorySessionId(uuid::Uuid::nil()),
+            },
+        }
+    }
+}
+
+impl IntoHistorySessionId for HistorySessionId {
+    fn into_history_session_id(self) -> HistorySessionId {
+        self
+    }
+}
+
 /// Unique ID for the session in which reedline was run to disambiguate different sessions
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HistorySessionId(pub i64);
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct HistorySessionId(pub uuid::Uuid);
 impl HistorySessionId {
     /// Wrap a raw session id, e.g. one read back from the history store.
-    pub const fn new(i: i64) -> HistorySessionId {
-        HistorySessionId(i)
+    pub fn new(id: impl IntoHistorySessionId) -> HistorySessionId {
+        id.into_history_session_id()
     }
 }
 
@@ -40,14 +81,38 @@ impl Display for HistorySessionId {
 impl ToSql for HistorySessionId {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         Ok(rusqlite::types::ToSqlOutput::Owned(
-            rusqlite::types::Value::Integer(self.0),
+            rusqlite::types::Value::Text(self.0.to_string()),
         ))
     }
 }
 
 impl From<HistorySessionId> for i64 {
     fn from(id: HistorySessionId) -> Self {
-        id.0
+        id.0.as_u128() as i64
+    }
+}
+
+impl From<i64> for HistorySessionId {
+    fn from(id: i64) -> Self {
+        HistorySessionId(uuid::Uuid::from_u128(id as u128))
+    }
+}
+
+impl From<uuid::Uuid> for HistorySessionId {
+    fn from(u: uuid::Uuid) -> Self {
+        HistorySessionId(u)
+    }
+}
+
+impl From<String> for HistorySessionId {
+    fn from(s: String) -> Self {
+        s.as_str().into_history_session_id()
+    }
+}
+
+impl From<&str> for HistorySessionId {
+    fn from(s: &str) -> Self {
+        s.into_history_session_id()
     }
 }
 

@@ -21,7 +21,7 @@ const SQLITE_APPLICATION_ID: i32 = 1151497937;
 pub struct SqliteBackedHistory {
     db: rusqlite::Connection,
     session: Option<HistorySessionId>,
-    session_timestamp: Option<chrono::DateTime<Utc>>,
+    _session_timestamp: Option<chrono::DateTime<Utc>>,
 }
 
 fn deserialize_history_item<E: HistoryItemExtraInfo>(
@@ -37,9 +37,11 @@ fn deserialize_history_item<E: HistoryItemExtraInfo>(
             }
         }),
         command_line: row.get("command_line")?,
-        session_id: row
-            .get::<&str, Option<i64>>("session_id")?
-            .map(HistorySessionId::new),
+        session_id: match row.get::<&str, Option<rusqlite::types::Value>>("session_id")? {
+            Some(rusqlite::types::Value::Integer(i)) => Some(HistorySessionId::from(i)),
+            Some(rusqlite::types::Value::Text(s)) => Some(HistorySessionId::from(s)),
+            _ => None,
+        },
         hostname: row.get("hostname")?,
         cwd: row.get("cwd")?,
         duration: row
@@ -109,7 +111,7 @@ fn save_with_extra_conn<E: HistoryItemExtraInfo>(
                 ":id": entry.id.map(|id| id.0),
                 ":start_timestamp": entry.start_timestamp.map(|e| e.timestamp_millis()),
                 ":command_line": entry.command_line,
-                ":session_id": entry.session_id.map(|e| e.0),
+                ":session_id": entry.session_id.map(|e| e.0.to_string()),
                 ":hostname": entry.hostname,
                 ":cwd": entry.cwd,
                 ":duration_ms": entry.duration.map(|e| e.as_millis() as i64),
@@ -300,13 +302,54 @@ impl SqliteBackedHistory {
                 format!("Unknown database version {db_version}"),
             )));
         }
+        let needs_migration: bool = db
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name='history'",
+                params![],
+                |r| {
+                    let sql: String = r.get(0)?;
+                    Ok(sql.contains("session_id integer") && sql.contains("strict"))
+                },
+            )
+            .unwrap_or(false);
+
+        if needs_migration {
+            db.execute_batch(
+                "
+                PRAGMA foreign_keys = OFF;
+                ALTER TABLE history RENAME TO _history_old;
+                CREATE TABLE history (
+                    id integer primary key autoincrement,
+                    command_line text not null,
+                    start_timestamp integer,
+                    session_id any,
+                    hostname text,
+                    cwd text,
+                    duration_ms integer,
+                    exit_status integer,
+                    more_info text
+                ) strict;
+                INSERT INTO history (id, command_line, start_timestamp, session_id, hostname, cwd, duration_ms, exit_status, more_info)
+                SELECT id, command_line, start_timestamp, session_id, hostname, cwd, duration_ms, exit_status, more_info FROM _history_old;
+                DROP TABLE _history_old;
+                CREATE INDEX IF NOT EXISTS idx_history_time on history(start_timestamp);
+                CREATE INDEX IF NOT EXISTS idx_history_cwd on history(cwd);
+                CREATE INDEX IF NOT EXISTS idx_history_exit_status on history(exit_status);
+                CREATE INDEX IF NOT EXISTS idx_history_cmd on history(command_line);
+                CREATE INDEX IF NOT EXISTS idx_history_session on history(session_id);
+                PRAGMA foreign_keys = ON;
+                ",
+            )
+            .map_err(map_sqlite_err)?;
+        }
+
         db.execute_batch(
             "
         create table if not exists history (
             id integer primary key autoincrement,
             command_line text not null,
             start_timestamp integer,
-            session_id integer,
+            session_id any,
             hostname text,
             cwd text,
             duration_ms integer,
@@ -325,7 +368,7 @@ impl SqliteBackedHistory {
         Ok(SqliteBackedHistory {
             db,
             session,
-            session_timestamp,
+            _session_timestamp: session_timestamp,
         })
     }
 
@@ -420,18 +463,10 @@ impl SqliteBackedHistory {
                 wheres.push("exit_status != 0");
             }
         }
-        if let (Some(session_id), Some(session_timestamp)) =
-            (query.filter.session, self.session_timestamp)
-        {
-            // Filter so that we get rows:
-            // - that have the same session_id, or
-            // - were executed before our session started
-            wheres.push("(session_id = :session_id OR start_timestamp < :session_timestamp)");
-            params.push((":session_id", Box::new(session_id)));
-            params.push((
-                ":session_timestamp",
-                Box::new(session_timestamp.timestamp_millis()),
-            ));
+        if let Some(session_id) = query.filter.session.as_ref() {
+            // Filter so that we get rows strictly from the same session
+            wheres.push("session_id = :session_id");
+            params.push((":session_id", Box::new(session_id.0.to_string())));
         }
 
         // Build WHERE string, appending dynamic json_type/json_extract conditions last.
@@ -551,7 +586,7 @@ impl SqliteBackedHistory {
                 ":id": entry.id.map(|id| id.0),
                 ":start_timestamp": entry.start_timestamp.map(|e| e.timestamp_millis()),
                 ":command_line": entry.command_line,
-                ":session_id": entry.session_id.map(|e| e.0),
+                ":session_id": entry.session_id.map(|e| e.0.to_string()),
                 ":hostname": entry.hostname,
                 ":cwd": entry.cwd,
                 ":duration_ms": entry.duration.map(|e| e.as_millis() as i64),
