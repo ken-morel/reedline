@@ -5,7 +5,7 @@ use crate::{
         add_common_control_bindings, add_common_edit_bindings, add_common_navigation_bindings,
         add_common_selection_bindings, edit_bind, Keybindings,
     },
-    Direction, EditCommand, MotionTarget, WordEdge, WordKind,
+    Direction, EditCommand, Granularity, MotionTarget, ReedlineEvent, WordEdge, WordKind,
 };
 
 /// Default Helix normal-mode keybindings.
@@ -44,6 +44,23 @@ pub fn default_helix_normal_keybindings() -> Keybindings {
         KeyModifiers::ALT,
         KeyCode::Char('`'),
         edit_bind(EditCommand::UppercaseSelection),
+    );
+    // `Alt-;` flips cursor and anchor.
+    kb.add_binding(
+        KeyModifiers::ALT,
+        KeyCode::Char(';'),
+        edit_bind(EditCommand::SwapCursorAndAnchor),
+    );
+    // `Ctrl-d` deletes line (helix C-d = "@xd").
+    kb.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('d'),
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::SelectLine]),
+            ReedlineEvent::Edit(vec![EditCommand::CutSelection {
+                granularity: Granularity::LineWise,
+            }]),
+        ]),
     );
 
     kb
@@ -128,6 +145,15 @@ pub fn default_helix_select_keybindings() -> Keybindings {
     );
     // Backspace follows `h`, as it follows normal mode's collapsing left step.
     kb.add_binding(KM::NONE, KC::Backspace, extend(MT::Grapheme(D::Backward)));
+    // `;` collapses selection and returns to normal mode (helix config: ";" = ["collapse_selection", "normal_mode"]).
+    kb.add_binding(
+        KM::NONE,
+        KC::Char(';'),
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::CollapseSelection(Direction::Forward)]),
+            ReedlineEvent::HelixChangeMode("normal".into()),
+        ]),
+    );
 
     kb
 }
@@ -141,6 +167,28 @@ pub fn default_helix_insert_keybindings() -> Keybindings {
     add_common_navigation_bindings(&mut kb);
     add_common_edit_bindings(&mut kb);
     add_common_selection_bindings(&mut kb);
+
+    // Helix insert navigation (helix config: A-h, A-l, A-j, A-k)
+    kb.add_binding(
+        KeyModifiers::ALT,
+        KeyCode::Char('h'),
+        edit_bind(EditCommand::MoveLeft { select: false }),
+    );
+    kb.add_binding(
+        KeyModifiers::ALT,
+        KeyCode::Char('l'),
+        edit_bind(EditCommand::MoveRight { select: false }),
+    );
+    kb.add_binding(
+        KeyModifiers::ALT,
+        KeyCode::Char('j'),
+        edit_bind(EditCommand::InsertNewlineBelow),
+    );
+    kb.add_binding(
+        KeyModifiers::ALT,
+        KeyCode::Char('k'),
+        edit_bind(EditCommand::InsertNewlineAbove),
+    );
 
     kb
 }

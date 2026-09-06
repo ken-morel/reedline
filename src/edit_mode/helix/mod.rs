@@ -37,8 +37,8 @@ enum Pending {
     },
     /// `r` is waiting for the replacement character.
     Replace,
-    /// `g` is waiting for the goto target (`h`/`l`/`g`/`e`).
-    Goto,
+    /// `g`/`G` is waiting for the goto target (`h`/`l`/`g`/`e`/`s`).
+    Goto { extend: bool },
 }
 
 /// Every parse_event will result in one of three outcomes:
@@ -325,7 +325,7 @@ fn complete_pending(pending: Pending, count: usize, key: KeyEvent) -> Outcome {
             None,
         ),
         Pending::Replace => exec(count, Verb::OnSelection(Op::Replace(ch)), None),
-        Pending::Goto => {
+        Pending::Goto { extend } => {
             let target = match ch {
                 'h' => MotionTarget::LineEdge(Direction::Backward),
                 'l' => MotionTarget::LineEdge(Direction::Forward),
@@ -334,7 +334,11 @@ fn complete_pending(pending: Pending, count: usize, key: KeyEvent) -> Outcome {
                 's' => MotionTarget::LineStartNonBlank,
                 _ => return Outcome::Reject,
             };
-            exec(count, Verb::CollapsingMotion(target), None)
+            if extend {
+                exec(count, Verb::SelectingMotion(target), None)
+            } else {
+                exec(count, Verb::CollapsingMotion(target), None)
+            }
         }
     }
 }
@@ -353,8 +357,13 @@ fn interpret(mode: HelixMode, count: Option<usize>, key: KeyEvent) -> Outcome {
     }
     // Helix reads `3gg` as "go to line 3", which has no `MotionTarget` yet, so
     // a counted `g` falls through to the reject arm rather than acting as `gg`.
-    if key.code == KeyCode::Char('g') && count.is_none() {
-        return Outcome::Absorb(Pending::Goto);
+    if count.is_none() {
+        if key.code == KeyCode::Char('g') {
+            return Outcome::Absorb(Pending::Goto { extend: false });
+        }
+        if key.code == KeyCode::Char('G') {
+            return Outcome::Absorb(Pending::Goto { extend: true });
+        }
     }
     let count = count.unwrap_or(1);
     match key.code {
@@ -485,6 +494,22 @@ fn interpret(mode: HelixMode, count: Option<usize>, key: KeyEvent) -> Outcome {
             'P' => exec(
                 count,
                 Verb::Paste(Direction::Backward),
+                Some(HelixMode::Normal),
+            ),
+            'H' => exec(
+                count,
+                Verb::SelectingMotion(MotionTarget::LineStartNonBlank),
+                None,
+            ),
+            'L' => exec(
+                count,
+                Verb::SelectingMotion(MotionTarget::LineEdge(Direction::Forward)),
+                None,
+            ),
+            'V' => exec(count, Verb::SelectLine, None),
+            ';' => exec(
+                count,
+                Verb::Collapse(Direction::Forward),
                 Some(HelixMode::Normal),
             ),
             _ => Outcome::Reject,
@@ -1018,7 +1043,7 @@ mod test {
     fn g_absorbs_without_emitting() {
         let mut helix = normal();
         assert_eq!(helix.parse_event(chr('g')), ReedlineEvent::None);
-        assert_eq!(helix.pending, Some(Pending::Goto));
+        assert_eq!(helix.pending, Some(Pending::Goto { extend: false }));
     }
 
     #[rstest]
@@ -1086,7 +1111,7 @@ mod test {
         assert_eq!(helix.pending, None);
         assert_eq!(helix.count, None);
         assert_eq!(helix.parse_event(chr('g')), ReedlineEvent::None);
-        assert_eq!(helix.pending, Some(Pending::Goto));
+        assert_eq!(helix.pending, Some(Pending::Goto { extend: false }));
     }
 
     #[test]
@@ -1515,5 +1540,56 @@ mod test {
         assert_eq!(helix.pending, None);
         assert_eq!(helix.count, None);
         assert_eq!(helix.mode, HelixMode::Insert);
+    }
+
+    #[test]
+    fn semicolon_collapses_selection_and_enters_normal() {
+        let mut helix = normal();
+        let _ = helix.parse_event(chr('v'));
+        assert_eq!(helix.mode, HelixMode::Select);
+        assert_eq!(
+            helix.parse_event(chr(';')),
+            ReedlineEvent::Multiple(vec![
+                ReedlineEvent::Edit(vec![EditCommand::CollapseSelection(Direction::Forward)]),
+                ReedlineEvent::HelixChangeMode("normal".into()),
+            ])
+        );
+        let _ = helix.handle_mode_specific_event(ReedlineEvent::HelixChangeMode("normal".into()));
+        assert_eq!(helix.mode, HelixMode::Normal);
+        assert_eq!(
+            helix.parse_event(chr(';')),
+            ReedlineEvent::Multiple(vec![
+                ReedlineEvent::Edit(vec![EditCommand::CollapseSelection(Direction::Forward)]),
+                ReedlineEvent::Repaint,
+            ])
+        );
+    }
+
+    #[test]
+    fn h_and_l_select_line_boundaries() {
+        let mut helix = normal();
+        assert_eq!(
+            helix.parse_event(chr('H')),
+            ReedlineEvent::Edit(vec![EditCommand::Select(MotionTarget::LineStartNonBlank)])
+        );
+        assert_eq!(
+            helix.parse_event(chr('L')),
+            ReedlineEvent::Edit(vec![EditCommand::Select(MotionTarget::LineEdge(
+                Direction::Forward
+            ))])
+        );
+    }
+
+    #[test]
+    fn uppercase_g_extends_goto() {
+        let mut helix = normal();
+        assert_eq!(helix.parse_event(chr('G')), ReedlineEvent::None);
+        assert_eq!(helix.pending, Some(Pending::Goto { extend: true }));
+        assert_eq!(
+            helix.parse_event(chr('h')),
+            ReedlineEvent::Edit(vec![EditCommand::Select(MotionTarget::LineEdge(
+                Direction::Backward
+            ))])
+        );
     }
 }
