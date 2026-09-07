@@ -791,6 +791,11 @@ pub enum EditCommand {
         /// The text object to operate on
         text_object: TextObject,
     },
+    /// Select the specified text object
+    SelectTextObject {
+        /// The text object to operate on
+        text_object: TextObject,
+    },
 }
 
 impl EditCommand {
@@ -827,6 +832,7 @@ impl EditCommand {
             EditCommand::SelectAll => EditType::MoveCursor { select: true },
             EditCommand::EraseSelection => EditType::EditText,
             EditCommand::SelectLine => EditType::MoveCursor { select: true },
+            EditCommand::SelectTextObject { .. } => EditType::MoveCursor { select: true },
             // Text edits
             EditCommand::InsertChar(_)
             | EditCommand::Backspace

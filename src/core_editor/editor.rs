@@ -391,6 +391,7 @@ impl Editor {
             EditCommand::CopyAroundPair { left, right } => self.copy_around_pair(*left, *right),
             EditCommand::CutTextObject { text_object } => self.cut_text_object(*text_object),
             EditCommand::CopyTextObject { text_object } => self.copy_text_object(*text_object),
+            EditCommand::SelectTextObject { text_object } => self.select_text_object(*text_object),
         }
         let leaves_selection = matches!(command.edit_type(), EditType::MoveCursor { select: true })
             || matches!(command, EditCommand::PasteAtSelectionEdge { .. })
@@ -1795,6 +1796,12 @@ impl Editor {
     fn copy_text_object(&mut self, text_object: TextObject) {
         if let Some(range) = self.text_object_range(text_object) {
             self.copy_range(range);
+        }
+    }
+
+    fn select_text_object(&mut self, text_object: TextObject) {
+        if let Some(range) = self.text_object_range(text_object) {
+            self.place(Cursor::new(range.start, range.end));
         }
     }
 
@@ -4689,6 +4696,28 @@ mod test {
             assert_eq!(editor.get_selection(), Some((0, 4)), "setup");
             editor.run_edit_command(&EditCommand::EraseSelection);
             assert_eq!(editor.get_buffer(), "def");
+        }
+
+        #[test]
+        fn helix_select_text_object_word_and_bigword() {
+            let mut editor = helix_editor("hello http://test.org world");
+            editor.move_to_position(2, false); // inside "hello"
+            editor.run_edit_command(&EditCommand::SelectTextObject {
+                text_object: TextObject {
+                    scope: TextObjectScope::Inner,
+                    object_type: TextObjectType::Word,
+                },
+            });
+            assert_eq!(editor.get_selection(), Some((0, 5)));
+
+            editor.move_to_position(8, false); // inside "http://test.org"
+            editor.run_edit_command(&EditCommand::SelectTextObject {
+                text_object: TextObject {
+                    scope: TextObjectScope::Inner,
+                    object_type: TextObjectType::BigWord,
+                },
+            });
+            assert_eq!(editor.get_selection(), Some((6, 21)));
         }
 
         // --- `x` (line selection) ---
